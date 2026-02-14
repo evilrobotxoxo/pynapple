@@ -4,6 +4,7 @@ Abstract class for `core` time series.
 """
 
 import abc
+import datetime
 from numbers import Number
 
 import numpy as np
@@ -12,6 +13,33 @@ from ._core_functions import _count, _restrict, _value_from
 from .interval_set import IntervalSet
 from .time_index import TsIndex
 from .utils import check_filename, convert_to_numpy_array
+
+
+def _check_time_origin_compatibility(obj_a, obj_b):
+    """Check that two objects have compatible time_origin values.
+
+    Parameters
+    ----------
+    obj_a : object
+        First object (with time_origin attribute)
+    obj_b : object
+        Second object (with time_origin attribute)
+
+    Raises
+    ------
+    TypeError
+        If one object is synchronized and the other is not.
+    ValueError
+        If objects have different time origins.
+    """
+    origin_a = getattr(obj_a, "time_origin", None)
+    origin_b = getattr(obj_b, "time_origin", None)
+    if (origin_a is None) != (origin_b is None):
+        raise TypeError("Cannot combine synchronized and unsynchronized objects.")
+    if origin_a is not None and origin_b is not None and origin_a != origin_b:
+        raise ValueError(
+            f"Objects have different time origins ({origin_a} vs {origin_b})."
+        )
 
 
 class _Base(abc.ABC):
@@ -31,7 +59,12 @@ class _Base(abc.ABC):
     time_support: IntervalSet
     """The time support of the time series"""
 
-    def __init__(self, t, time_units="s", time_support=None):
+    time_origin: float
+    """Float (unix timestamp of t=0) or None if not synchronized"""
+
+    def __init__(self, t, time_units="s", time_support=None, time_origin=None):
+        self.time_origin = time_origin
+
         if isinstance(t, TsIndex):
             self.index = t
         else:
@@ -59,6 +92,20 @@ class _Base(abc.ABC):
             else:
                 self.rate = np.nan
                 self.time_support = IntervalSet(start=[], end=[])
+
+    def origin_datetime(self):
+        """Return the UTC datetime of the recording start (time_origin as datetime).
+
+        Returns
+        -------
+        datetime.datetime or None
+            The UTC datetime corresponding to time_origin, or None if not synchronized.
+        """
+        if self.time_origin is None:
+            return None
+        return datetime.datetime.fromtimestamp(
+            self.time_origin, tz=datetime.timezone.utc
+        )
 
     @abc.abstractmethod
     def _define_instance(self, time_index, time_support, values=None, **kwargs):
@@ -195,6 +242,9 @@ class _Base(abc.ABC):
             raise TypeError(
                 "First argument should be an instance of Tsd, TsdFrame or TsdTensor"
             )
+
+        _check_time_origin_compatibility(self, data)
+
         if ep is None:
             ep = data.time_support
         if not isinstance(ep, IntervalSet):
