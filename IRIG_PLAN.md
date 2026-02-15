@@ -1,8 +1,10 @@
-# IRIG-H Synchronization for Pynapple
+# Time Origin Infrastructure for Pynapple
 
 ## Context
 
-Pynapple timestamps are relative to an undefined origin. To synchronize data streams across hardware, this feature adds IRIG-H timecode decoding, clock drift correction, and a `time_origin` attribute that anchors pynapple objects to UTC. No existing code breaks -- when `time_origin` is `None` (default), all behavior is identical.
+Pynapple timestamps are relative to an undefined origin. To synchronize data streams across hardware, this feature adds a `time_origin` attribute that anchors pynapple objects to UTC. No existing code breaks -- when `time_origin` is `None` (default), all behavior is identical.
+
+IRIG-specific decoding and synchronization logic lives in a separate package: [`pynapple-irig`](https://github.com/SjulsonLab/pynapple-irig).
 
 ## API Summary
 
@@ -10,10 +12,7 @@ Pynapple timestamps are relative to an undefined origin. To synchronize data str
 
 | Function / Method | Purpose |
 |---|---|
-| `nap.irig_sync(data, pulses)` | Decode IRIG-H, correct drift, set `time_origin` |
 | `.set_time_origin(origin)` | Return a new object with `time_origin` set (timestamps unchanged) |
-| `nap.detect_ttl_pulses(signal)` | Extract pulse intervals from raw TTL waveform |
-| `nap.decode_irig(pulses)` | Decode IRIG-H pulses into UTC timestamps (low-level) |
 
 ### Alignment -- shift a synchronized object to match another synchronized object
 
@@ -39,7 +38,7 @@ Pynapple timestamps are relative to an undefined origin. To synchronize data str
 - **Internal storage:** drift-corrected relative timestamps (not unix time). Avoids breaking `restrict()`, `get()`, and manual `IntervalSet` creation.
 - **`time_origin`:** optional attribute on all objects. `None` = not synced (default).
 - **Compatibility enforcement:** operations between two objects error if one is synced and the other isn't, or if their `time_origin` values differ. Both `None` = no checking (backward compatible).
-- **Synchronization** (anchoring an object to an external time reference): `irig_sync()` decodes IRIG + corrects drift + sets origin. `.set_time_origin()` stamps an origin on an object without changing timestamps (for objects that share a clock with an already-synced object).
+- **Synchronization** (anchoring an object to an external time reference): `.set_time_origin()` stamps an origin on an object without changing timestamps. IRIG-based synchronization (decode + drift correct + set origin) is provided by the separate `pynapple-irig` package.
 - **Alignment** (shifting one synchronized object to match another): `.align_to(other)` shifts timestamps by the offset between two origins so both objects share a common timebase. Both objects must already be synchronized (have a `time_origin`) before alignment can occur.
 - **Propagation:** `time_origin` propagates through `restrict()`, `count()`, `copy()`, `save()`/`load()`, etc.
 
@@ -76,7 +75,7 @@ Files: `time_series.py`, `interval_set.py`, `ts_group.py`, `utils.py`
 - `_concatenate_tsd()` checks compatibility across inputs and propagates to output
 - `_split_tsd()` propagates from input to each split piece
 
-### Step 3b: `nap.concatenate()`
+### Step 4: `nap.concatenate()`
 
 File: `pynapple/core/utils.py` or new file
 
@@ -85,14 +84,6 @@ File: `pynapple/core/utils.py` or new file
 - Requires strictly increasing, non-overlapping timestamps
 - Propagates `time_origin` to the result
 - Existing `np.concatenate` hook (`_concatenate_tsd`) also gains the same checks
-
-### Step 4: IRIG module
-
-File: `pynapple/core/irig.py` (new)
-
-- `detect_ttl_pulses(signal, threshold)` -- Tsd of TTL values -> IntervalSet of pulses
-- `decode_irig(pulses)` -- decode IRIG-H pulse train -> frames, mapping, quality
-- `irig_sync(data, irig_pulses)` -- decode IRIG -> linear regression -> drift-corrected object + SyncInfo
 
 ### Step 5: Save/load
 
@@ -108,32 +99,29 @@ File: `pynapple/io/interface_npz.py`
 
 File: `pynapple/core/__init__.py`
 
-- Export `irig_sync`, `detect_ttl_pulses`, `decode_irig`, `concatenate`
+- Export `concatenate`
 
 ### Step 8: Tests
 
-File: `tests/test_irig.py` (new) | Data: `tests/test_irig_data/` (gitignored)
+File: `tests/test_time_origin.py` (new)
 
-- Helpers: `generate_irig_pulses()`, `generate_synced_recording()`
-- Tests: IRIG decoding, drift correction, end-to-end sync, `time_origin` propagation, backward compatibility, compatibility errors, `.set_time_origin()`, `.align_to()`, input formats, edge cases
+- Tests: `time_origin` propagation, backward compatibility, compatibility errors, `.set_time_origin()`, `.align_to()`, `nap.concatenate()`
 
 ## Files
 
 | File | Action |
 |---|---|
-| `pynapple/core/irig.py` | New |
-| `pynapple/core/base_class.py` | Modify -- `time_origin`, `.origin_datetime()`, checks |
+| `pynapple/core/base_class.py` | Modify -- `time_origin`, `.origin_datetime()`, `.set_time_origin()`, `.align_to()`, checks |
 | `pynapple/core/time_series.py` | Modify -- propagation |
 | `pynapple/core/interval_set.py` | Modify -- `time_origin`, propagation |
 | `pynapple/core/ts_group.py` | Modify -- `time_origin`, propagation, checks |
 | `pynapple/core/utils.py` | Modify -- `nap.concatenate()`, `time_origin` in `_concatenate_tsd`/`_split_tsd` |
 | `pynapple/core/__init__.py` | Modify -- exports |
 | `pynapple/io/interface_npz.py` | Modify -- save/load |
-| `tests/test_irig.py` | New |
-| `.gitignore` | Modify -- add `tests/test_irig_data/` |
+| `tests/test_time_origin.py` | New |
 
 ## Verification
 
 1. `pytest tests/` -- all existing tests pass
-2. `pytest tests/test_irig.py -v` -- new tests pass
+2. `pytest tests/test_time_origin.py -v` -- new tests pass
 3. Lint passes

@@ -1,4 +1,4 @@
-# Proposal: IRIG-H Time Synchronization for Pynapple
+# Proposal: Time Origin Infrastructure and IRIG-H Synchronization for Pynapple
 
 ## The problem
 
@@ -6,23 +6,34 @@ Modern neuroscience experiments routinely combine data from multiple acquisition
 
 In practice this means users align their data before loading it into pynapple, using ad-hoc scripts that vary from lab to lab. This is error-prone: silent clock drift accumulates over long recordings, off-by-one bugs in pulse counting go undetected, and there is no safety net if a user accidentally combines time series from different sessions.
 
+## Two-repo architecture
+
+The implementation is split across two repositories:
+
+- **pynapple** (this repo): General-purpose `time_origin` infrastructure -- the attribute, propagation, compatibility checks, `set_time_origin()`, `align_to()`, and `nap.concatenate()`.
+- **[pynapple-irig](https://github.com/SjulsonLab/pynapple-irig)**: IRIG-specific decoding and synchronization -- `detect_ttl_pulses()`, `decode_irig()`, `irig_sync()`, and `SyncInfo`. This is a separate pip-installable package that depends on pynapple.
+
+The `time_origin` attribute is general-purpose and useful for any multi-stream synchronization workflow. IRIG decoding is one specific way to set `time_origin`, but labs may use other methods (PTP, GPS, manual timestamps). Keeping the IRIG code separate keeps pynapple's core focused while still providing a reference implementation for IRIG users.
+
 ## What IRIG provides
 
 IRIG (Inter-Range Instrumentation Group) timecodes are a family of standardized timing signals widely used in instrumentation and increasingly adopted in neuroscience hardware. An IRIG encoder broadcasts a continuous pulse train that encodes UTC time. A recording system captures this pulse train alongside its neural data. By decoding the pulses, we can determine the exact UTC time corresponding to any sample in the recording, and we can measure and correct clock drift between the local oscillator and the UTC reference.
 
 This proposal focuses on IRIG-H (one pulse per minute, 60 BCD-encoded pulses per frame), which is the format used by several common neuroscience acquisition systems. The architecture is general enough to support other IRIG variants in the future.
 
-## What this proposal adds to pynapple
+## What this proposal adds
 
-The changes fall into two layers: a small, general-purpose extension to pynapple's core data model, and a specialized processing module for IRIG decoding.
+### Core layer (pynapple): `time_origin` attribute
 
-**Core layer: a `time_origin` attribute.** Every pynapple object (Tsd, TsdFrame, TsdTensor, Ts, IntervalSet, TsGroup) gains an optional `time_origin` attribute. This is a single float64 representing the Unix timestamp of the object's t=0 (the number of seconds since midnight on Jan 1, 1970). When `time_origin` is `None` (the default), the object behaves exactly as it does today -- no existing code is affected. When it is set, pynapple knows that the object's timestamps are anchored to real-world time, and it can enforce consistency: operations that combine two objects will raise an error if their time origins differ or if one is synchronized and the other is not. This catches a class of bugs that currently pass silently.
+Every pynapple object (Tsd, TsdFrame, TsdTensor, Ts, IntervalSet, TsGroup) gains an optional `time_origin` attribute. This is a single float64 representing the Unix timestamp of the object's t=0 (the number of seconds since midnight on Jan 1, 1970). When `time_origin` is `None` (the default), the object behaves exactly as it does today -- no existing code is affected. When it is set, pynapple knows that the object's timestamps are anchored to real-world time, and it can enforce consistency: operations that combine two objects will raise an error if their time origins differ or if one is synchronized and the other is not. This catches a class of bugs that currently pass silently.
 
 A key design choice is that timestamps remain relative. We do not convert the time axis to Unix time. Instead, `time_origin` records the offset, and the timestamps stay as small, human-readable floats (seconds from recording start). This means `restrict()`, `get()`, and manual `IntervalSet` construction continue to work with the same kinds of values users are accustomed to. A convenience method, `.origin_datetime()`, converts the origin to a Python `datetime` for display and interoperability.
 
 `time_origin` propagates automatically. When an operation produces a new object -- `restrict()`, `count()`, `copy()`, slicing, numpy operations -- the result inherits the origin of its input. This propagation follows the existing `_define_instance()` pattern, so it requires minimal changes to the codebase and does not introduce new control flow. Save and load round-trip the attribute through NPZ files, remaining backward-compatible with files that predate the feature.
 
-**Processing layer: IRIG decoding and drift correction.** A new module provides functions for the full synchronization workflow:
+### IRIG layer (pynapple-irig): decoding and drift correction
+
+The separate `pynapple-irig` package provides functions for the full IRIG synchronization workflow:
 
 `detect_ttl_pulses()` takes a raw TTL waveform (a Tsd) and returns an IntervalSet of pulse intervals. This is a general utility -- useful beyond IRIG for any TTL-based event detection.
 
@@ -30,12 +41,16 @@ A key design choice is that timestamps remain relative. We do not convert the ti
 
 `irig_sync()` is the main user-facing function. Given a pynapple object and its associated IRIG pulse train, it decodes the timecode, fits a linear model to correct for clock drift, adjusts the object's timestamps, and sets `time_origin`. It returns the corrected object along with a diagnostic summary (drift in ppm, number of decoded frames, fit residuals).
 
-Two instance methods complete the workflow. They correspond to two distinct steps -- **synchronization** and **alignment** -- that are worth defining clearly:
+### Synchronization and alignment
 
-**Synchronization** means anchoring an object to an external time reference. It answers the question "when, in real-world time, did this recording start?" There are two ways to synchronize an object: `irig_sync()` (described above) decodes an IRIG pulse train and sets `time_origin` automatically, while `.set_time_origin(origin)` lets you stamp an origin manually. The latter is for objects that share a clock with an already-synced object. For example, if an electrophysiology system records both neural data and a behavior camera on the same clock, you synchronize the neural data with IRIG and then stamp the same origin onto the behavior data:
+Two instance methods on pynapple objects complete the workflow. They correspond to two distinct steps -- **synchronization** and **alignment** -- that are worth defining clearly:
+
+**Synchronization** means anchoring an object to an external time reference. It answers the question "when, in real-world time, did this recording start?" There are two ways to synchronize an object: `irig_sync()` from the `pynapple-irig` package decodes an IRIG pulse train and sets `time_origin` automatically, while `.set_time_origin(origin)` lets you stamp an origin manually. The latter is for objects that share a clock with an already-synced object. For example, if an electrophysiology system records both neural data and a behavior camera on the same clock, you synchronize the neural data with IRIG and then stamp the same origin onto the behavior data:
 
 ```python
-ephys_synced = nap.irig_sync(ephys, irig_pulses)
+import pynapple_irig as irig
+
+ephys_synced, info = irig.irig_sync(ephys, irig_pulses)
 behavior_synced = behavior.set_time_origin(ephys_synced.time_origin)
 ```
 
@@ -56,12 +71,14 @@ Calling `.align_to()` on an object that has no `time_origin` raises an error, be
 
 Time synchronization and alignment are not niche concerns. They are prerequisites for most multi-modal analyses, and getting either step wrong invalidates results. By handling both at the container level, pynapple can prevent timing errors structurally rather than relying on users to be careful. The `time_origin` attribute is cheap (one float per object, no performance impact) and invisible when unused, so it imposes no burden on users who do not need it.
 
-The IRIG decoding module is more specialized, but IRIG timecodes are an open standard used by hardware from multiple vendors. Providing a reference decoder in pynapple saves every lab from writing their own and eliminates a source of subtle, hard-to-debug timing errors.
+The IRIG decoding logic is more specialized and lives in the separate `pynapple-irig` package. IRIG timecodes are an open standard used by hardware from multiple vendors, and providing a reference decoder saves every lab from writing their own. Keeping it in a separate package means pynapple's core stays focused on general-purpose time series operations, while users who need IRIG can `pip install pynapple-irig`.
 
 ## Backward compatibility
 
-Every change defaults to `None`. Existing code that does not pass `time_origin` sees no change in behavior. Existing NPZ files load without issues. The compatibility checks only activate when at least one object in an operation has a non-`None` origin. The new module introduces new public functions (`irig_sync`, `detect_ttl_pulses`, `decode_irig`, `concatenate`), and core classes gain new methods (`.set_time_origin()`, `.align_to()`, `.origin_datetime()`), but no existing method signature or behavior is modified.
+Every change defaults to `None`. Existing code that does not pass `time_origin` sees no change in behavior. Existing NPZ files load without issues. The compatibility checks only activate when at least one object in an operation has a non-`None` origin. Pynapple gains new public functions (`concatenate`) and core classes gain new methods (`.set_time_origin()`, `.align_to()`, `.origin_datetime()`), but no existing method signature or behavior is modified.
 
 ## Scope of changes
 
-The core changes touch `base_class.py`, `time_series.py`, `interval_set.py`, `ts_group.py`, `utils.py`, and `interface_npz.py`. In each case the modification is small: adding a parameter to `__init__`, passing it through `_define_instance()`, and including it in save/load. `utils.py` gains `nap.concatenate()` and `time_origin` handling in the existing numpy concatenation and split hooks. One new file, `irig.py`, contains the decoding and synchronization logic. A corresponding test file covers IRIG decoding, drift correction, propagation, concatenation, backward compatibility, and error cases.
+**In pynapple:** The core changes touch `base_class.py`, `time_series.py`, `interval_set.py`, `ts_group.py`, `utils.py`, and `interface_npz.py`. In each case the modification is small: adding a parameter to `__init__`, passing it through `_define_instance()`, and including it in save/load. `utils.py` gains `nap.concatenate()` and `time_origin` handling in the existing numpy concatenation and split hooks. A test file covers propagation, concatenation, backward compatibility, and error cases.
+
+**In pynapple-irig:** One package with modules for TTL pulse detection, IRIG-H decoding, and the `irig_sync()` pipeline. See the [pynapple-irig repo](https://github.com/SjulsonLab/pynapple-irig) for details.
