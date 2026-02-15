@@ -107,6 +107,64 @@ class _Base(abc.ABC):
             self.time_origin, tz=datetime.timezone.utc
         )
 
+    def set_time_origin(self, origin):
+        """Return a new object with time_origin set (timestamps unchanged).
+
+        Parameters
+        ----------
+        origin : float or None
+            Unix timestamp of t=0 (UTC epoch seconds), or None to clear.
+
+        Returns
+        -------
+        same type as self
+            New object with time_origin set.
+        """
+        if origin is not None and not isinstance(origin, (int, float)):
+            raise TypeError("time_origin must be a float (unix timestamp) or None.")
+        data = getattr(self, "values", None)
+        if data is not None:
+            data = data.copy() if hasattr(data, "copy") else data[:].copy()
+        new_obj = self._define_instance(
+            self.index.copy(), self.time_support, values=data
+        )
+        object.__setattr__(new_obj, "time_origin", origin)
+        return new_obj
+
+    def align_to(self, other):
+        """Return a new object with timestamps shifted to match other's time origin.
+
+        Both objects must be synchronized (have time_origin set).
+        Timestamps are shifted by (self.time_origin - other.time_origin).
+
+        Parameters
+        ----------
+        other : object
+            The reference object to align to. Must have a time_origin attribute.
+
+        Returns
+        -------
+        same type as self
+            New object with shifted timestamps and other's time_origin.
+        """
+        if self.time_origin is None:
+            raise TypeError("Cannot align: self has no time_origin.")
+        other_origin = getattr(other, "time_origin", None)
+        if other_origin is None:
+            raise TypeError("Cannot align: other has no time_origin.")
+        offset = self.time_origin - other_origin
+        new_t = self.index.values + offset
+        new_support = IntervalSet(
+            start=self.time_support.start + offset,
+            end=self.time_support.end + offset,
+        )
+        data = getattr(self, "values", None)
+        if data is not None:
+            data = data.copy() if hasattr(data, "copy") else data[:].copy()
+        new_obj = self._define_instance(new_t, new_support, values=data)
+        object.__setattr__(new_obj, "time_origin", other_origin)
+        return new_obj
+
     @abc.abstractmethod
     def _define_instance(self, time_index, time_support, values=None, **kwargs):
         """Return a new class instance.
@@ -317,6 +375,8 @@ class _Base(abc.ABC):
 
         if ep is None:
             ep = self.time_support
+        else:
+            _check_time_origin_compatibility(self, ep)
         if not isinstance(ep, IntervalSet):
             raise TypeError("ep argument should be of type IntervalSet")
 
@@ -408,6 +468,8 @@ class _Base(abc.ABC):
         if not isinstance(iset, IntervalSet):
             raise TypeError("Argument should be IntervalSet")
 
+        _check_time_origin_compatibility(self, iset)
+
         time_array = self.index.values
         starts = iset.start
         ends = iset.end
@@ -432,6 +494,8 @@ class _Base(abc.ABC):
         """
         if not isinstance(iset, IntervalSet):
             raise TypeError("Argument should be IntervalSet")
+
+        _check_time_origin_compatibility(self, iset)
 
         time_array = self.index.values
         starts = iset.start
@@ -724,10 +788,11 @@ class _Base(abc.ABC):
         kwargs = {
             key: file[key]
             for key in file.keys()
-            if key not in ["start", "end", "type", "_metadata"]
+            if key not in ["start", "end", "type", "_metadata", "time_origin"]
         }
         iset = IntervalSet(start=file["start"], end=file["end"])
-        ts = cls(time_support=iset, **kwargs)
+        time_origin = float(file["time_origin"]) if "time_origin" in file else None
+        ts = cls(time_support=iset, time_origin=time_origin, **kwargs)
         if "_metadata" in file:  # load metadata if it exists
             if file["_metadata"]:  # check if metadata is not empty
                 m = file["_metadata"].item()

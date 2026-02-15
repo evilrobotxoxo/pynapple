@@ -2,6 +2,7 @@
 The class `IntervalSet` deals with non-overlaping epochs. `IntervalSet` objects can interact with each other or with the time series objects.
 """
 
+import datetime
 import importlib
 import warnings
 from numbers import Number
@@ -184,6 +185,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         end=None,
         time_units="s",
         metadata=None,
+        time_origin=None,
     ):
         # set directly in __dict__ to avoid infinite recursion in __setattr__
         self.__dict__["_initialized"] = False
@@ -295,6 +297,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         _MetadataMixin.__init__(self)
         # to test compatibility with pandas
         # self._metadata = pd.DataFrame(index=self.metadata_index)
+        self.time_origin = time_origin
         self._class_attributes = self.__dir__()  # get list of all attributes
         self._class_attributes.append("_class_attributes")  # add this property
         self._initialized = True
@@ -393,10 +396,81 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
                 dtype=object,
             )
 
-        return tabulate(table, headers=headers, tablefmt="plain") + "\n" + bottom
+        result = tabulate(table, headers=headers, tablefmt="plain") + "\n" + bottom
+        if self.time_origin is not None:
+            result += "\ntime_origin: {}".format(
+                self.origin_datetime().strftime("%Y-%m-%d %H:%M:%S UTC")
+            )
+        return result
 
     def __str__(self):
         return self.__repr__()
+
+    def origin_datetime(self):
+        """Return the UTC datetime of the time origin.
+
+        Returns
+        -------
+        datetime.datetime or None
+            The UTC datetime corresponding to time_origin, or None if not synchronized.
+        """
+        if self.time_origin is None:
+            return None
+        return datetime.datetime.fromtimestamp(
+            self.time_origin, tz=datetime.timezone.utc
+        )
+
+    def set_time_origin(self, origin):
+        """Return a new IntervalSet with time_origin set (intervals unchanged).
+
+        Parameters
+        ----------
+        origin : float or None
+            Unix timestamp of t=0 (UTC epoch seconds), or None to clear.
+
+        Returns
+        -------
+        IntervalSet
+            New IntervalSet with time_origin set.
+        """
+        if origin is not None and not isinstance(origin, (int, float)):
+            raise TypeError("time_origin must be a float (unix timestamp) or None.")
+        new_iset = IntervalSet(
+            start=self.start.copy(), end=self.end.copy(), time_origin=origin
+        )
+        if len(self.metadata_columns):
+            new_iset.set_info(self._metadata.copy())
+        return new_iset
+
+    def align_to(self, other):
+        """Return a new IntervalSet with intervals shifted to match other's time origin.
+
+        Both objects must be synchronized (have time_origin set).
+
+        Parameters
+        ----------
+        other : object
+            The reference object to align to. Must have a time_origin attribute.
+
+        Returns
+        -------
+        IntervalSet
+            New IntervalSet with shifted intervals and other's time_origin.
+        """
+        if self.time_origin is None:
+            raise TypeError("Cannot align: self has no time_origin.")
+        other_origin = getattr(other, "time_origin", None)
+        if other_origin is None:
+            raise TypeError("Cannot align: other has no time_origin.")
+        offset = self.time_origin - other_origin
+        new_iset = IntervalSet(
+            start=self.start + offset,
+            end=self.end + offset,
+            time_origin=other_origin,
+        )
+        if len(self.metadata_columns):
+            new_iset.set_info(self._metadata.copy())
+        return new_iset
 
     def __len__(self):
         return len(self.values)
@@ -479,7 +553,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
                     and ((key[1].stop is None) or (key[1].stop > 1))
                 ):
                     # start and end included in slice
-                    return IntervalSet(output)
+                    return IntervalSet(output, time_origin=self.time_origin)
                 else:
                     return output
 
@@ -491,7 +565,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         else:
             output = self.values.__getitem__(key)
             metadata = self._metadata.iloc[key].reset_index()
-            return IntervalSet(output, metadata=metadata)
+            return IntervalSet(output, metadata=metadata, time_origin=self.time_origin)
 
     def __array__(self, dtype=None):
         return self.values.astype(dtype)
@@ -608,7 +682,8 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         IntervalSet
             The IntervalSet object
         """
-        ep = cls(start=file["start"], end=file["end"])
+        time_origin = float(file["time_origin"]) if "time_origin" in file else None
+        ep = cls(start=file["start"], end=file["end"], time_origin=time_origin)
         if "_metadata" in file:  # load metadata if it exists
             if file["_metadata"]:  # check that metadata is not empty
                 metadata = file["_metadata"].item()
@@ -634,7 +709,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
             )
         s = self.values[0, 0]
         e = self.values[-1, 1]
-        return IntervalSet(s, e)
+        return IntervalSet(s, e, time_origin=self.time_origin)
 
     def tot_length(self, time_units="s"):
         """
@@ -668,6 +743,9 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         out: IntervalSet
             _
         """
+        from .base_class import _check_time_origin_compatibility
+
+        _check_time_origin_compatibility(self, a)
         start1 = self.values[:, 0]
         end1 = self.values[:, 1]
         start2 = a.values[:, 0]
@@ -682,7 +760,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
             m2.drop(overlap)
 
         metadata = m1.join(m2)
-        return IntervalSet(s, e, metadata=metadata)
+        return IntervalSet(s, e, metadata=metadata, time_origin=self.time_origin)
 
     def union(self, a):
         """
@@ -698,6 +776,9 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         out: IntervalSet
             _
         """
+        from .base_class import _check_time_origin_compatibility
+
+        _check_time_origin_compatibility(self, a)
         if len(self.metadata_columns):
             warnings.warn(
                 "metadata incompatible with union method. dropping metadata from result",
@@ -708,7 +789,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         start2 = a.values[:, 0]
         end2 = a.values[:, 1]
         s, e = jitunion(start1, end1, start2, end2)
-        return IntervalSet(s, e)
+        return IntervalSet(s, e, time_origin=self.time_origin)
 
     def set_diff(self, a):
         """
@@ -724,13 +805,16 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         out: IntervalSet
             _
         """
+        from .base_class import _check_time_origin_compatibility
+
+        _check_time_origin_compatibility(self, a)
         start1 = self.values[:, 0]
         end1 = self.values[:, 1]
         start2 = a.values[:, 0]
         end2 = a.values[:, 1]
         s, e, m = jitdiff(start1, end1, start2, end2)
         m1 = self._metadata.loc[m].reset_index()
-        return IntervalSet(s, e, metadata=m1)
+        return IntervalSet(s, e, metadata=m1, time_origin=self.time_origin)
 
     def in_interval(self, tsd):
         """
@@ -748,6 +832,9 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         out: numpy.ndarray
             an array with the interval index labels for each time stamp (NaN) for timestamps not in IntervalSet
         """
+        from .base_class import _check_time_origin_compatibility
+
+        _check_time_origin_compatibility(self, tsd)
         times = tsd.index.values
         starts = self.values[:, 0]
         ends = self.values[:, 1]
@@ -844,7 +931,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
             )
 
         if len(self) == 0:
-            return IntervalSet(start=[], end=[])
+            return IntervalSet(start=[], end=[], time_origin=self.time_origin)
 
         threshold = TsIndex.format_timestamps(
             np.array((threshold,), dtype=np.float64).ravel(), time_units
@@ -855,7 +942,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         start = np.hstack((start[0], start[1:][tojoin]))
         end = np.hstack((end[0:-1][tojoin], end[-1]))
 
-        return IntervalSet(start=start, end=end)
+        return IntervalSet(start=start, end=end, time_origin=self.time_origin)
 
     def get_intervals_center(self, alpha=0.5):
         """
@@ -936,13 +1023,15 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         RuntimeError
             If filename is not str, path does not exist or filename is a directory.
         """
-        np.savez(
-            check_filename(filename),
+        save_dict = dict(
             start=self.values[:, 0],
             end=self.values[:, 1],
             type=np.array(["IntervalSet"], dtype=np.str_),
             _metadata=dict(self._metadata),  # save metadata as dictionary
         )
+        if self.time_origin is not None:
+            save_dict["time_origin"] = self.time_origin
+        np.savez(check_filename(filename), **save_dict)
 
         return
 
@@ -983,7 +1072,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
             raise IOError("Argument time_units should be of type str")
 
         if len(self) == 0:
-            return IntervalSet(start=[], end=[])
+            return IntervalSet(start=[], end=[], time_origin=self.time_origin)
 
         interval_size = TsIndex.format_timestamps(
             np.array((interval_size,), dtype=np.float64).ravel(), time_units
@@ -1025,7 +1114,7 @@ class IntervalSet(NDArrayOperatorsMixin, _MetadataMixin):
         # Removing 1 microsecond to have strictly non-overlapping intervals for intervals coming from the same epoch
         new_ends -= 1e-6
 
-        return IntervalSet(new_starts, new_ends, metadata=metadata)
+        return IntervalSet(new_starts, new_ends, metadata=metadata, time_origin=self.time_origin)
 
     @add_meta_docstring("set_info")
     def set_info(self, metadata=None, **kwargs):

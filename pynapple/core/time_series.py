@@ -157,6 +157,11 @@ def _initialize_tsd_output(
                 # update the kwargs
                 kwargs.update({"columns": cols, "metadata": metadata})
 
+            # propagate time_origin from input
+            to = getattr(input_object, "time_origin", None)
+            if to is not None:
+                kwargs.setdefault("time_origin", to)
+
             return cls(t=time_index, d=values, time_support=time_support, **kwargs)
 
     return values
@@ -171,8 +176,10 @@ class _BaseTsd(_Base, NDArrayOperatorsMixin, abc.ABC):
     values: np.ndarray
     """An array of the time series data"""
 
-    def __init__(self, t, d, time_units="s", time_support=None, load_array=True):
-        super().__init__(t, time_units, time_support)
+    def __init__(
+        self, t, d, time_units="s", time_support=None, load_array=True, time_origin=None
+    ):
+        super().__init__(t, time_units, time_support, time_origin=time_origin)
 
         if load_array or isinstance(d, np.ndarray):
             self.values = convert_to_array(d, "d")
@@ -951,7 +958,14 @@ class TsdTensor(_BaseTsd):
     """
 
     def __init__(
-        self, t, d, time_units="s", time_support=None, load_array=True, **kwargs
+        self,
+        t,
+        d,
+        time_units="s",
+        time_support=None,
+        load_array=True,
+        time_origin=None,
+        **kwargs,
     ):
         """
         TsdTensor initializer
@@ -969,9 +983,11 @@ class TsdTensor(_BaseTsd):
         load_array : bool, optional
             Whether the data should be converted to a numpy (or jax) array. Useful when passing a memory map object like zarr.
             Default is True. Does not apply if `d` is already a numpy array  or a numpy memory map.
+        time_origin : float, optional
+            Unix timestamp of t=0 (UTC epoch seconds). None if not synchronized.
 
         """
-        super().__init__(t, d, time_units, time_support, load_array)
+        super().__init__(t, d, time_units, time_support, load_array, time_origin=time_origin)
 
         if not self.values.ndim >= 3:
             raise RuntimeError(
@@ -1019,10 +1035,20 @@ class TsdTensor(_BaseTsd):
                 for i, array in zip(self.index, self.values):
                     _str_.append([i, create_str(array)])
 
-            return tabulate(_str_, headers=headers, colalign=("left",)) + "\n" + bottom
+            result = (
+                tabulate(_str_, headers=headers, colalign=("left",))
+                + "\n"
+                + bottom
+            )
 
         else:
-            return tabulate([], headers=headers) + "\n" + bottom
+            result = tabulate([], headers=headers) + "\n" + bottom
+
+        if self.time_origin is not None:
+            result += "\ntime_origin: {}".format(
+                self.origin_datetime().strftime("%Y-%m-%d %H:%M:%S UTC")
+            )
+        return result
 
     def __getitem__(self, key):
         if isinstance(key, Tsd):
@@ -1382,14 +1408,16 @@ class TsdTensor(_BaseTsd):
         """
         filename = self._get_filename(filename)
 
-        np.savez(
-            filename,
+        save_dict = dict(
             t=self.index.values,
             d=self.values,
             start=self.time_support.start,
             end=self.time_support.end,
             type=np.array([self.nap_class], dtype=np.str_),
         )
+        if self.time_origin is not None:
+            save_dict["time_origin"] = self.time_origin
+        np.savez(filename, **save_dict)
 
         return
 
@@ -1532,6 +1560,7 @@ class TsdFrame(_BaseTsd, _MetadataMixin):
         columns=None,
         load_array=True,
         metadata=None,
+        time_origin=None,
     ):
         c = columns
 
@@ -1542,7 +1571,7 @@ class TsdFrame(_BaseTsd, _MetadataMixin):
         else:
             assert d is not None, "Missing argument d when initializing TsdFrame"
 
-        super().__init__(t, d, time_units, time_support, load_array)
+        super().__init__(t, d, time_units, time_support, load_array, time_origin=time_origin)
 
         assert self.values.ndim <= 2, "Data should be 1 or 2 dimensional."
 
@@ -1706,9 +1735,17 @@ class TsdFrame(_BaseTsd, _MetadataMixin):
                 table = np.vstack((table, mtable))
 
         if len(table):
-            return tabulate(table, headers=headers, colalign=("left",)) + "\n" + bottom
+            result = (
+                tabulate(table, headers=headers, colalign=("left",)) + "\n" + bottom
+            )
         else:
-            return tabulate([], headers=headers) + "\n" + bottom
+            result = tabulate([], headers=headers) + "\n" + bottom
+
+        if self.time_origin is not None:
+            result += "\ntime_origin: {}".format(
+                self.origin_datetime().strftime("%Y-%m-%d %H:%M:%S UTC")
+            )
+        return result
 
     def __setattr__(self, name, value):
         # necessary setter to allow metadata to be set as an attribute
@@ -2221,8 +2258,7 @@ class TsdFrame(_BaseTsd, _MetadataMixin):
         if cols_name.dtype == np.dtype("O"):
             cols_name = cols_name.astype(str)
 
-        np.savez(
-            filename,
+        save_dict = dict(
             t=self.index.values,
             d=self.values[:],
             start=self.time_support.start,
@@ -2231,6 +2267,9 @@ class TsdFrame(_BaseTsd, _MetadataMixin):
             type=np.array(["TsdFrame"], dtype=np.str_),
             _metadata=dict(self._metadata),  # save metadata as dictionary
         )
+        if self.time_origin is not None:
+            save_dict["time_origin"] = self.time_origin
+        np.savez(filename, **save_dict)
 
         return
 
@@ -2714,7 +2753,14 @@ class Tsd(_BaseTsd):
     """
 
     def __init__(
-        self, t, d=None, time_units="s", time_support=None, load_array=True, **kwargs
+        self,
+        t,
+        d=None,
+        time_units="s",
+        time_support=None,
+        load_array=True,
+        time_origin=None,
+        **kwargs,
     ):
         """
         Tsd Initializer.
@@ -2732,6 +2778,8 @@ class Tsd(_BaseTsd):
         load_array : bool, optional
             Whether the data should be converted to a numpy (or jax) array. Useful when passing a memory map object like zarr.
             Default is True. Does not apply if `d` is already a numpy array or a numpy memory map.
+        time_origin : float, optional
+            Unix timestamp of t=0 (UTC epoch seconds). None if not synchronized.
         """
         if isinstance(t, pd.Series):
             d = t.values
@@ -2739,7 +2787,7 @@ class Tsd(_BaseTsd):
         else:
             assert d is not None, "Missing argument d when initializing Tsd"
 
-        super().__init__(t, d, time_units, time_support, load_array)
+        super().__init__(t, d, time_units, time_support, load_array, time_origin=time_origin)
 
         assert self.values.ndim == 1, "Data should be 1 dimensional"
 
@@ -2771,13 +2819,13 @@ class Tsd(_BaseTsd):
                     ):
                         table.append([i, v])
 
-                    return (
+                    result = (
                         tabulate(table, headers=headers, colalign=("left",))
                         + "\n"
                         + bottom
                     )
                 else:
-                    return (
+                    result = (
                         tabulate(
                             np.vstack((self.index, self.values)).T,
                             headers=headers,
@@ -2787,7 +2835,13 @@ class Tsd(_BaseTsd):
                         + bottom
                     )
             else:
-                return tabulate([], headers=headers) + "\n" + bottom
+                result = tabulate([], headers=headers) + "\n" + bottom
+
+        if self.time_origin is not None:
+            result += "\ntime_origin: {}".format(
+                self.origin_datetime().strftime("%Y-%m-%d %H:%M:%S UTC")
+            )
+        return result
 
     def __setitem__(self, key, value):
         if isinstance(key, Tsd):
@@ -3316,14 +3370,16 @@ class Tsd(_BaseTsd):
             If filename is not str, path does not exist or filename is a directory.
         """
         filename = self._get_filename(filename)
-        np.savez(
-            filename,
+        save_dict = dict(
             t=self.index.values,
             d=self.values,
             start=self.time_support.start,
             end=self.time_support.end,
             type=np.array([self.nap_class], dtype=np.str_),
         )
+        if self.time_origin is not None:
+            save_dict["time_origin"] = self.time_origin
+        np.savez(filename, **save_dict)
 
         return
 
@@ -3340,7 +3396,7 @@ class Ts(_Base):
         The time support of the time series
     """
 
-    def __init__(self, t, time_units="s", time_support=None):
+    def __init__(self, t, time_units="s", time_support=None, time_origin=None):
         """
         Ts Initializer
 
@@ -3352,8 +3408,10 @@ class Ts(_Base):
             The time units in which times are specified ('us', 'ms', 's' [default])
         time_support : IntervalSet, optional
             The time support of the Ts object
+        time_origin : float, optional
+            Unix timestamp of t=0 (UTC epoch seconds). None if not synchronized.
         """
-        super().__init__(t, time_units, time_support)
+        super().__init__(t, time_units, time_support, time_origin=time_origin)
 
         if isinstance(time_support, IntervalSet) and len(self.index):
             starts = time_support.start
@@ -3374,7 +3432,11 @@ class Ts(_Base):
         Optional parameters for initialization are either passed to the function or are grabbed from self.
         """
         if values is None:
-            return self.__class__(t=time_index, time_support=time_support)
+            return self.__class__(
+                t=time_index,
+                time_support=time_support,
+                time_origin=self.time_origin,
+            )
         else:
             return _initialize_tsd_output(
                 self,
@@ -3400,7 +3462,12 @@ class Ts(_Base):
             _str_ = "\n".join([str(i) for i in self.index])
 
         bottom = "shape: {}".format(len(self.index))
-        return "\n".join((upper, _str_, bottom))
+        result = "\n".join((upper, _str_, bottom))
+        if self.time_origin is not None:
+            result += "\ntime_origin: {}".format(
+                self.origin_datetime().strftime("%Y-%m-%d %H:%M:%S UTC")
+            )
+        return result
 
     def __getitem__(self, key):
         if isinstance(key, tuple):
@@ -3413,7 +3480,9 @@ class Ts(_Base):
         if isinstance(index, Number):
             index = np.array([index])
 
-        return Ts(t=index, time_support=self.time_support)
+        return Ts(
+            t=index, time_support=self.time_support, time_origin=self.time_origin
+        )
 
     def as_series(self):
         """
@@ -3506,13 +3575,15 @@ class Ts(_Base):
         """
         filename = self._get_filename(filename)
 
-        np.savez(
-            filename,
+        save_dict = dict(
             t=self.index.values,
             start=self.time_support.start,
             end=self.time_support.end,
             type=np.array(["Ts"], dtype=np.str_),
         )
+        if self.time_origin is not None:
+            save_dict["time_origin"] = self.time_origin
+        np.savez(filename, **save_dict)
 
         return
 

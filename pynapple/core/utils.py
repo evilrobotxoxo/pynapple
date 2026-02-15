@@ -252,6 +252,7 @@ def _concatenate_tsd(func, *args, **kwargs):
     arrays = []
     time_indexes = []
     time_supports = []
+    time_origins = []
     nap_types = []
     columns = []
     nap_class = None
@@ -273,6 +274,7 @@ def _concatenate_tsd(func, *args, **kwargs):
             arrays.append(arg.values)
             time_indexes.append(arg.index.values)
             time_supports.append(arg.time_support)
+            time_origins.append(getattr(arg, "time_origin", None))
             nap_types.append(arg.nap_class)
             nap_class = arg.__class__
             if hasattr(arg, "columns"):
@@ -296,7 +298,22 @@ def _concatenate_tsd(func, *args, **kwargs):
             for support in time_supports[1:]:
                 time_support = time_support.union(support)
 
+            # Check time_origin compatibility
+            shared_origin = time_origins[0] if time_origins else None
+            for to in time_origins[1:]:
+                if (shared_origin is None) != (to is None):
+                    raise TypeError(
+                        "Cannot concatenate synchronized and unsynchronized objects."
+                    )
+                if shared_origin is not None and to is not None and shared_origin != to:
+                    raise ValueError(
+                        "Objects have different time origins "
+                        f"({shared_origin} vs {to})."
+                    )
+
             new_kwargs = {"columns": columns[0]} if len(columns) else {}
+            if shared_origin is not None:
+                new_kwargs["time_origin"] = shared_origin
 
             return nap_class(
                 t=new_index, d=output, time_support=time_support, **new_kwargs
@@ -333,6 +350,207 @@ def _concatenate_tsd(func, *args, **kwargs):
 
                 warnings.warn(msg, stacklevel=2)
                 return output
+
+
+def concatenate(*objects):
+    """Concatenate pynapple objects along the time axis.
+
+    Supports Tsd, TsdFrame, TsdTensor, Ts, IntervalSet, and TsGroup.
+    All inputs must be the same type and have compatible time_origin values.
+    Timestamps are sorted automatically with a warning if originally unsorted.
+
+    Parameters
+    ----------
+    *objects : pynapple objects
+        Objects to concatenate. All must be the same type. Can also be passed
+        as a single list/tuple of objects.
+
+    Returns
+    -------
+    concatenated object
+        Same type as input, with time_origin propagated.
+
+    Raises
+    ------
+    ValueError
+        If no objects are provided, types don't match, or time_origins differ.
+    TypeError
+        If mixing synchronized and unsynchronized objects.
+    """
+    # Allow passing a single list/tuple
+    if len(objects) == 1 and isinstance(objects[0], (list, tuple)):
+        objects = objects[0]
+
+    if len(objects) == 0:
+        raise ValueError("No objects to concatenate.")
+
+    if len(objects) == 1:
+        return objects[0]
+
+    # Lazy imports to avoid circular dependencies
+    from .interval_set import IntervalSet
+    from .time_series import Ts, Tsd, TsdFrame, TsdTensor, _BaseTsd
+
+    # Check all same type
+    obj_type = type(objects[0])
+    for i, obj in enumerate(objects[1:], 1):
+        if type(obj) != obj_type:
+            raise TypeError(
+                f"All objects must be the same type. "
+                f"Got {obj_type.__name__} and {type(obj).__name__} at position {i}."
+            )
+
+    # Check time_origin compatibility
+    origins = [getattr(obj, "time_origin", None) for obj in objects]
+    shared_origin = origins[0]
+    for i, to in enumerate(origins[1:], 1):
+        if (shared_origin is None) != (to is None):
+            raise TypeError(
+                "Cannot concatenate synchronized and unsynchronized objects."
+            )
+        if shared_origin is not None and to is not None and shared_origin != to:
+            raise ValueError(
+                f"Objects have different time origins ({shared_origin} vs {to})."
+            )
+
+    # Dispatch by type
+    if isinstance(objects[0], IntervalSet):
+        return _concatenate_interval_sets(objects, shared_origin)
+    elif isinstance(objects[0], _BaseTsd) or isinstance(objects[0], Ts):
+        return _concatenate_time_series(objects, shared_origin)
+    else:
+        # Try TsGroup via deferred import
+        from .ts_group import TsGroup
+
+        if isinstance(objects[0], TsGroup):
+            return _concatenate_ts_groups(objects, shared_origin)
+        else:
+            raise TypeError(f"Cannot concatenate objects of type {obj_type.__name__}.")
+
+
+def _concatenate_interval_sets(objects, shared_origin):
+    """Concatenate IntervalSet objects (union)."""
+    from .interval_set import IntervalSet
+
+    all_starts = np.concatenate([obj.start for obj in objects])
+    all_ends = np.concatenate([obj.end for obj in objects])
+    return IntervalSet(start=all_starts, end=all_ends, time_origin=shared_origin)
+
+
+def _concatenate_time_series(objects, shared_origin):
+    """Concatenate time series objects along the time axis."""
+    from .time_series import Ts, TsdFrame
+
+    # Gather timestamps and data
+    all_t = np.concatenate([obj.index.values for obj in objects])
+
+    has_values = hasattr(objects[0], "values")
+    if has_values:
+        all_d = np.concatenate([obj.values for obj in objects], axis=0)
+    else:
+        all_d = None
+
+    # Check if sorted, sort with warning if not
+    if len(all_t) > 1 and np.any(np.diff(all_t) < 0):
+        warnings.warn(
+            "Timestamps are not sorted. Sorting them automatically.",
+            stacklevel=3,
+        )
+        sort_idx = np.argsort(all_t, kind="stable")
+        all_t = all_t[sort_idx]
+        if all_d is not None:
+            all_d = all_d[sort_idx]
+
+    # Check for duplicate timestamps after sorting
+    if len(all_t) > 1 and np.any(np.diff(all_t) == 0):
+        raise ValueError(
+            "Duplicate timestamps found after concatenation. "
+            "Timestamps must be strictly increasing."
+        )
+
+    # Union time supports
+    from .interval_set import IntervalSet
+
+    time_support = objects[0].time_support
+    for obj in objects[1:]:
+        time_support = time_support.union(obj.time_support)
+
+    # Build kwargs
+    kwargs = {"time_origin": shared_origin}
+    if isinstance(objects[0], TsdFrame) and hasattr(objects[0], "columns"):
+        kwargs["columns"] = objects[0].columns
+
+    # Construct result
+    cls = type(objects[0])
+    if all_d is not None:
+        return cls(t=all_t, d=all_d, time_support=time_support, **kwargs)
+    else:
+        return cls(t=all_t, time_support=time_support, **kwargs)
+
+
+def _concatenate_ts_groups(objects, shared_origin):
+    """Concatenate TsGroup objects, merging overlapping keys."""
+    from .ts_group import TsGroup
+
+    merged_data = {}
+    first_metadata = {}
+
+    for obj in objects:
+        for k in obj.keys():
+            if k in merged_data:
+                # Merge: concatenate the underlying Ts/Tsd
+                existing = merged_data[k]
+                new_obj = obj[k]
+                merged_t = np.concatenate([existing.index.values, new_obj.index.values])
+                if hasattr(existing, "values") and hasattr(new_obj, "values"):
+                    merged_d = np.concatenate([existing.values, new_obj.values], axis=0)
+                    # Sort if needed
+                    if len(merged_t) > 1 and np.any(np.diff(merged_t) < 0):
+                        sort_idx = np.argsort(merged_t, kind="stable")
+                        merged_t = merged_t[sort_idx]
+                        merged_d = merged_d[sort_idx]
+                    merged_data[k] = type(existing)(t=merged_t, d=merged_d)
+                else:
+                    if len(merged_t) > 1 and np.any(np.diff(merged_t) < 0):
+                        merged_t = np.sort(merged_t)
+                    from .time_series import Ts
+
+                    merged_data[k] = Ts(t=merged_t)
+            else:
+                merged_data[k] = obj[k]
+                # Store first metadata for this key
+                meta_cols = [
+                    c for c in obj.metadata_columns if c != "rate"
+                ]
+                if meta_cols:
+                    first_metadata[k] = {
+                        c: obj._metadata[c][list(obj.keys()).index(k)]
+                        for c in meta_cols
+                    }
+
+    # Build metadata dict
+    if first_metadata:
+        all_keys = sorted(merged_data.keys())
+        meta_cols = list(next(iter(first_metadata.values())).keys())
+        metadata = {
+            c: [first_metadata.get(k, {}).get(c, None) for k in all_keys]
+            for c in meta_cols
+        }
+    else:
+        metadata = None
+
+    # Union time supports
+    time_support = objects[0].time_support
+    for obj in objects[1:]:
+        time_support = time_support.union(obj.time_support)
+
+    return TsGroup(
+        merged_data,
+        time_support=time_support,
+        bypass_check=True,
+        metadata=metadata,
+        time_origin=shared_origin,
+    )
 
 
 class _TsdFrameSliceHelper:

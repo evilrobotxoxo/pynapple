@@ -9,6 +9,7 @@ from .core import (
     TsdTensor,
     TsGroup,
     TsIndex,
+    concatenate,
     nap_config,
 )
 from .io import *

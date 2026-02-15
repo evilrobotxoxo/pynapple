@@ -5,6 +5,7 @@ The class `TsGroup` helps group objects with different timestamps
 
 """
 
+import datetime
 import warnings
 from collections import UserDict
 from collections.abc import Hashable
@@ -17,7 +18,7 @@ from tabulate import tabulate
 
 from ._core_functions import _count
 from ._jitted_functions import jitunion, jitunion_isets
-from .base_class import _Base
+from .base_class import _Base, _check_time_origin_compatibility
 from .config import nap_config
 from .interval_set import IntervalSet
 from .metadata_class import _MetadataMixin, add_meta_docstring, add_or_convert_metadata
@@ -197,6 +198,7 @@ class TsGroup(UserDict, _MetadataMixin):
         time_units="s",
         bypass_check=False,
         metadata=None,
+        time_origin=None,
         **kwargs,
     ):
         # Check input type
@@ -301,6 +303,7 @@ class TsGroup(UserDict, _MetadataMixin):
         UserDict.__init__(self, data)
         rate = np.array([data[k].rate for k in self.index])
         self._metadata["rate"] = rate
+        self.time_origin = time_origin
         self.nap_class = self.__class__.__name__
         # grab current attributes before adding metadata
         self._class_attributes = self.__dir__()
@@ -410,6 +413,7 @@ class TsGroup(UserDict, _MetadataMixin):
             {k: self[k] for k in keys},
             time_support=self.time_support,
             metadata=metadata,
+            time_origin=self.time_origin,
         )
 
     def __repr__(self):
@@ -508,7 +512,12 @@ class TsGroup(UserDict, _MetadataMixin):
                 dtype=object,
             )
 
-        return tabulate(table, headers=headers)
+        result = tabulate(table, headers=headers)
+        if self.time_origin is not None:
+            result += "\ntime_origin: {}".format(
+                self.origin_datetime().strftime("%Y-%m-%d %H:%M:%S UTC")
+            )
+        return result
 
     def __str__(self):
         # Show all columns and all rows (no truncation).
@@ -545,6 +554,91 @@ class TsGroup(UserDict, _MetadataMixin):
         )
 
         return tabulate(table, headers=headers)
+
+    def origin_datetime(self):
+        """Return the UTC datetime of the time origin.
+
+        Returns
+        -------
+        datetime.datetime or None
+            The UTC datetime corresponding to time_origin, or None if not synchronized.
+        """
+        if self.time_origin is None:
+            return None
+        return datetime.datetime.fromtimestamp(
+            self.time_origin, tz=datetime.timezone.utc
+        )
+
+    def set_time_origin(self, origin):
+        """Return a new TsGroup with time_origin set (timestamps unchanged).
+
+        Parameters
+        ----------
+        origin : float or None
+            Unix timestamp of t=0 (UTC epoch seconds), or None to clear.
+
+        Returns
+        -------
+        TsGroup
+            New TsGroup with time_origin set.
+        """
+        if origin is not None and not isinstance(origin, (int, float)):
+            raise TypeError("time_origin must be a float (unix timestamp) or None.")
+        new_data = {k: self[k] for k in self.keys()}
+        metadata = self._metadata.copy()
+        metadata.drop("rate")
+        return TsGroup(
+            new_data,
+            time_support=self.time_support,
+            bypass_check=True,
+            metadata=dict(metadata) if len(metadata) else None,
+            time_origin=origin,
+        )
+
+    def align_to(self, other):
+        """Return a new TsGroup with timestamps shifted to match other's time origin.
+
+        Both objects must be synchronized (have time_origin set).
+
+        Parameters
+        ----------
+        other : object
+            The reference object to align to. Must have a time_origin attribute.
+
+        Returns
+        -------
+        TsGroup
+            New TsGroup with shifted timestamps and other's time_origin.
+        """
+        if self.time_origin is None:
+            raise TypeError("Cannot align: self has no time_origin.")
+        other_origin = getattr(other, "time_origin", None)
+        if other_origin is None:
+            raise TypeError("Cannot align: other has no time_origin.")
+        offset = self.time_origin - other_origin
+        new_data = {}
+        for k in self.keys():
+            obj = self[k]
+            new_t = obj.index.values + offset
+            if hasattr(obj, "values"):
+                new_data[k] = obj.__class__(
+                    t=new_t, d=obj.values.copy(), time_origin=other_origin
+                )
+            else:
+                new_data[k] = Ts(t=new_t, time_origin=other_origin)
+        new_support = IntervalSet(
+            start=self.time_support.start + offset,
+            end=self.time_support.end + offset,
+        )
+        metadata = self._metadata.copy()
+        metadata.drop("rate")
+        return TsGroup(
+            new_data,
+            time_support=new_support,
+            bypass_check=True,
+            metadata=dict(metadata) if len(metadata) else None,
+            time_origin=other_origin,
+        )
 
     def keys(self):
         """
@@ -624,13 +718,21 @@ class TsGroup(UserDict, _MetadataMixin):
            start    end
         0    0.0  100.0
         """
+        _check_time_origin_compatibility(self, ep)
+        # Strip time_origin from ep for inner restrict calls, since
+        # contained Ts/Tsd objects don't carry time_origin themselves.
+        inner_ep = IntervalSet(start=ep.start, end=ep.end)
         newgr = {}
         for k in self.index:
-            newgr[k] = self.data[k].restrict(ep)
+            newgr[k] = self.data[k].restrict(inner_ep)
         cols = self._metadata.columns[1:]  # .drop("rate")
 
         return TsGroup(
-            newgr, time_support=ep, bypass_check=True, metadata=self._metadata[cols]
+            newgr,
+            time_support=ep,
+            bypass_check=True,
+            metadata=self._metadata[cols],
+            time_origin=self.time_origin,
         )
 
     def value_from(self, tsd, ep=None, mode="closest"):
@@ -675,6 +777,7 @@ class TsGroup(UserDict, _MetadataMixin):
             raise TypeError(
                 "First argument should be an instance of Tsd, TsdFrame or TsdTensor"
             )
+        _check_time_origin_compatibility(self, tsd)
         if ep is None:
             ep = tsd.time_support
         if not isinstance(ep, IntervalSet):
@@ -684,12 +787,20 @@ class TsGroup(UserDict, _MetadataMixin):
                 f"Argument mode should be 'closest', 'before', or 'after'. {mode} provided instead."
             )
 
+        # Strip time_origin for inner calls (contained objects don't carry it)
+        inner_ep = IntervalSet(start=ep.start, end=ep.end)
+        inner_tsd = tsd.set_time_origin(None) if tsd.time_origin is not None else tsd
         newgr = {}
         for k in self.data:
-            newgr[k] = self.data[k].value_from(tsd, ep=ep, mode=mode)
+            newgr[k] = self.data[k].value_from(inner_tsd, ep=inner_ep, mode=mode)
 
         cols = self._metadata.columns[1:]  # .drop("rate")
-        return TsGroup(newgr, time_support=ep, metadata=self._metadata[cols])
+        return TsGroup(
+            newgr,
+            time_support=ep,
+            metadata=self._metadata[cols],
+            time_origin=self.time_origin,
+        )
 
     @add_or_convert_metadata
     def count(self, bin_size=None, ep=None, time_units="s", dtype=None):
@@ -769,6 +880,8 @@ class TsGroup(UserDict, _MetadataMixin):
 
         if ep is None:
             ep = self.time_support
+        else:
+            _check_time_origin_compatibility(self, ep)
         if not isinstance(ep, IntervalSet):
             raise TypeError("ep argument should be of type IntervalSet")
 
@@ -1131,6 +1244,7 @@ class TsGroup(UserDict, _MetadataMixin):
             time_support=self.time_support,
             bypass_check=True,
             metadata=self._metadata[cols],
+            time_origin=self.time_origin,
         )
 
     #################################
@@ -1356,6 +1470,7 @@ class TsGroup(UserDict, _MetadataMixin):
         metadata = tsg1._metadata.copy()
 
         for i, tsg in enumerate(tsgroups[1:]):
+            _check_time_origin_compatibility(tsg1, tsg)
             if not ignore_metadata:
                 if tsg1.metadata_columns != tsg.metadata_columns:
                     raise ValueError(
@@ -1396,8 +1511,16 @@ class TsGroup(UserDict, _MetadataMixin):
         else:
             data = dict(items)
 
+        # Propagate time_origin from first group
+        shared_origin = tsg1.time_origin
+
         if ignore_metadata:
-            return TsGroup(data, time_support=time_support, bypass_check=False)
+            return TsGroup(
+                data,
+                time_support=time_support,
+                bypass_check=False,
+                time_origin=shared_origin,
+            )
         else:
             metadata.drop("rate")
             return TsGroup(
@@ -1405,6 +1528,7 @@ class TsGroup(UserDict, _MetadataMixin):
                 time_support=time_support,
                 bypass_check=False,
                 metadata=metadata,
+                time_origin=shared_origin,
             )
 
     def merge(
@@ -1626,6 +1750,8 @@ class TsGroup(UserDict, _MetadataMixin):
         dicttosave["keys"] = np.array(self.keys())
         dicttosave["start"] = self.time_support.start
         dicttosave["end"] = self.time_support.end
+        if self.time_origin is not None:
+            dicttosave["time_origin"] = self.time_origin
 
         np.savez(filename, **dicttosave)
 
@@ -1674,7 +1800,10 @@ class TsGroup(UserDict, _MetadataMixin):
             else:
                 group[key] = Ts(t=t, time_support=time_support)
 
-        tsgroup = cls(group, time_support=time_support, bypass_check=True)
+        time_origin = float(file["time_origin"]) if "time_origin" in file else None
+        tsgroup = cls(
+            group, time_support=time_support, bypass_check=True, time_origin=time_origin
+        )
 
         if "_metadata" in file:  # load metadata if it exists
             if file["_metadata"]:  # check that metadata is not empty
@@ -1695,6 +1824,7 @@ class TsGroup(UserDict, _MetadataMixin):
             "keys",
             "_metadata",
             "type",
+            "time_origin",
         }
 
         for k in set(file.keys()) - not_info_keys:
