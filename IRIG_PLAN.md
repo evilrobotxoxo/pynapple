@@ -2,7 +2,7 @@
 
 ## Context
 
-Pynapple timestamps are relative to an undefined origin. To synchronize data streams across hardware, this feature adds a `time_origin` attribute that anchors pynapple objects to UTC. No existing code breaks -- when `time_origin` is `None` (default), all behavior is identical.
+Pynapple timestamps are relative to an undefined origin. To synchronize data streams across hardware, this feature adds a `time_origin` attribute that anchors pynapple objects to UTC. `time_origin` is simply a float64 representing the unix time (number of seconds elapsed since Jan. 1, 1970) corresponding to t=0 in the pynapple object. No existing code breaks -- when `time_origin` is `None` (default), all behavior is identical.
 
 IRIG-specific decoding and synchronization logic lives in separate packages: [`neurokairos`](https://github.com/SjulsonLab/neurokairos) (core decoding, `ClockTable`) and [`neurokairos-pynapple`](https://github.com/SjulsonLab/neurokairos-pynapple) (pynapple integration via `BinaryFile`).
 
