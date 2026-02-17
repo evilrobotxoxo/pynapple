@@ -4,7 +4,7 @@
 
 Pynapple timestamps are relative to an undefined origin. To synchronize data streams across hardware, this feature adds a `time_origin` attribute that anchors pynapple objects to UTC. No existing code breaks -- when `time_origin` is `None` (default), all behavior is identical.
 
-IRIG-specific decoding and synchronization logic lives in a separate package: [`pynapple-irig`](https://github.com/SjulsonLab/pynapple-irig).
+IRIG-specific decoding and synchronization logic lives in a separate package: [`neurokairos-pynapple`](https://github.com/SjulsonLab/neurokairos-pynapple).
 
 ## API Summary
 
@@ -38,7 +38,7 @@ IRIG-specific decoding and synchronization logic lives in a separate package: [`
 - **Internal storage:** drift-corrected relative timestamps (not unix time). Avoids breaking `restrict()`, `get()`, and manual `IntervalSet` creation.
 - **`time_origin`:** optional attribute on all objects. `None` = not synced (default).
 - **Compatibility enforcement:** operations between two objects error if one is synced and the other isn't, or if their `time_origin` values differ. Both `None` = no checking (backward compatible).
-- **Time-referencing** (anchoring an object to an external time reference): `.set_time_origin()` stamps an origin on an object without changing timestamps. IRIG-based time-referencing (decode + drift correct + set origin) is provided by the separate `pynapple-irig` package.
+- **Time-referencing** (anchoring an object to an external time reference): `.set_time_origin()` stamps an origin on an object without changing timestamps. IRIG-based time-referencing (decode + drift correct + set origin) is provided by the separate `neurokairos-pynapple` package.
 - **Synchronization** (shifting one time-referenced object to match another): `.sync_to(other)` shifts timestamps by the offset between two origins so both objects share a common timebase. Both objects must already be time-referenced (have a `time_origin`) before synchronization can occur.
 - **Propagation:** `time_origin` propagates through `restrict()`, `count()`, `copy()`, `save()`/`load()`, etc.
 

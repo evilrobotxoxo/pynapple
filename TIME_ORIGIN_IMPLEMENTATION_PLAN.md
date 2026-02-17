@@ -2,7 +2,7 @@
 
 ## Context
 
-Pynapple timestamps are relative to an undefined origin. To support multi-stream synchronization, we're adding a `time_origin` attribute to all core objects. This anchors timestamps to UTC so pynapple can enforce consistency when combining objects from different recording systems. IRIG-specific decoding lives in a separate repo ([pynapple-irig](https://github.com/SjulsonLab/pynapple-irig)).
+Pynapple timestamps are relative to an undefined origin. To support multi-stream synchronization, we're adding a `time_origin` attribute to all core objects. This anchors timestamps to UTC so pynapple can enforce consistency when combining objects from different recording systems. IRIG-specific decoding lives in a separate repo ([neurokairos-pynapple](https://github.com/SjulsonLab/neurokairos-pynapple)).
 
 Branch: `irig_test`
 
