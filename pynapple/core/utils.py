@@ -303,7 +303,7 @@ def _concatenate_tsd(func, *args, **kwargs):
             for to in time_origins[1:]:
                 if (shared_origin is None) != (to is None):
                     raise TypeError(
-                        "Cannot concatenate synchronized and unsynchronized objects."
+                        "Cannot concatenate UTC time-referenced and unreferenced objects."
                     )
                 if shared_origin is not None and to is not None and shared_origin != to:
                     raise ValueError(
@@ -375,7 +375,7 @@ def concatenate(*objects):
     ValueError
         If no objects are provided, types don't match, or time_origins differ.
     TypeError
-        If mixing synchronized and unsynchronized objects.
+        If mixing UTC time-referenced and unreferenced objects.
     """
     # Allow passing a single list/tuple
     if len(objects) == 1 and isinstance(objects[0], (list, tuple)):
@@ -406,7 +406,7 @@ def concatenate(*objects):
     for i, to in enumerate(origins[1:], 1):
         if (shared_origin is None) != (to is None):
             raise TypeError(
-                "Cannot concatenate synchronized and unsynchronized objects."
+                "Cannot concatenate UTC time-referenced and unreferenced objects."
             )
         if shared_origin is not None and to is not None and shared_origin != to:
             raise ValueError(

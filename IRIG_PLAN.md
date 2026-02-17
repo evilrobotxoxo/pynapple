@@ -8,17 +8,17 @@ IRIG-specific decoding and synchronization logic lives in a separate package: [`
 
 ## API Summary
 
-### Synchronization -- anchor an object to an external time reference
+### Time-referencing -- anchor an object to an external time reference
 
 | Function / Method | Purpose |
 |---|---|
 | `.set_time_origin(origin)` | Return a new object with `time_origin` set (timestamps unchanged) |
 
-### Alignment -- shift a synchronized object to match another synchronized object
+### Synchronization -- shift a time-referenced object to match another time-referenced object
 
 | Function / Method | Purpose |
 |---|---|
-| `.align_to(other)` | Return a new object with timestamps shifted to match `other`'s time origin |
+| `.sync_to(other)` | Return a new object with timestamps shifted to match `other`'s time origin |
 
 ### Concatenation
 
@@ -38,8 +38,8 @@ IRIG-specific decoding and synchronization logic lives in a separate package: [`
 - **Internal storage:** drift-corrected relative timestamps (not unix time). Avoids breaking `restrict()`, `get()`, and manual `IntervalSet` creation.
 - **`time_origin`:** optional attribute on all objects. `None` = not synced (default).
 - **Compatibility enforcement:** operations between two objects error if one is synced and the other isn't, or if their `time_origin` values differ. Both `None` = no checking (backward compatible).
-- **Synchronization** (anchoring an object to an external time reference): `.set_time_origin()` stamps an origin on an object without changing timestamps. IRIG-based synchronization (decode + drift correct + set origin) is provided by the separate `pynapple-irig` package.
-- **Alignment** (shifting one synchronized object to match another): `.align_to(other)` shifts timestamps by the offset between two origins so both objects share a common timebase. Both objects must already be synchronized (have a `time_origin`) before alignment can occur.
+- **Time-referencing** (anchoring an object to an external time reference): `.set_time_origin()` stamps an origin on an object without changing timestamps. IRIG-based time-referencing (decode + drift correct + set origin) is provided by the separate `pynapple-irig` package.
+- **Synchronization** (shifting one time-referenced object to match another): `.sync_to(other)` shifts timestamps by the offset between two origins so both objects share a common timebase. Both objects must already be time-referenced (have a `time_origin`) before synchronization can occur.
 - **Propagation:** `time_origin` propagates through `restrict()`, `count()`, `copy()`, `save()`/`load()`, etc.
 
 ## Implementation
@@ -52,7 +52,7 @@ Files: `base_class.py`, `interval_set.py`, `ts_group.py`
 - Store before `_initialized = True`
 - Add `.origin_datetime()` method
 - Add `.set_time_origin(origin)` method -- returns a new object with `time_origin` set, timestamps unchanged
-- Add `.align_to(other)` method -- returns a new object with timestamps shifted to match `other`'s time origin (requires both objects to have `time_origin` set)
+- Add `.sync_to(other)` method -- returns a new object with timestamps shifted to match `other`'s time origin (requires both objects to have `time_origin` set)
 - `time_support` IntervalSets inherit `time_origin` from their parent
 
 ### Step 2: Compatibility checks
@@ -105,13 +105,13 @@ File: `pynapple/core/__init__.py`
 
 File: `tests/test_time_origin.py` (new)
 
-- Tests: `time_origin` propagation, backward compatibility, compatibility errors, `.set_time_origin()`, `.align_to()`, `nap.concatenate()`
+- Tests: `time_origin` propagation, backward compatibility, compatibility errors, `.set_time_origin()`, `.sync_to()`, `nap.concatenate()`
 
 ## Files
 
 | File | Action |
 |---|---|
-| `pynapple/core/base_class.py` | Modify -- `time_origin`, `.origin_datetime()`, `.set_time_origin()`, `.align_to()`, checks |
+| `pynapple/core/base_class.py` | Modify -- `time_origin`, `.origin_datetime()`, `.set_time_origin()`, `.sync_to()`, checks |
 | `pynapple/core/time_series.py` | Modify -- propagation |
 | `pynapple/core/interval_set.py` | Modify -- `time_origin`, propagation |
 | `pynapple/core/ts_group.py` | Modify -- `time_origin`, propagation, checks |

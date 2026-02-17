@@ -28,14 +28,14 @@ def _check_time_origin_compatibility(obj_a, obj_b):
     Raises
     ------
     TypeError
-        If one object is synchronized and the other is not.
+        If one object is UTC time-referenced and the other is not.
     ValueError
         If objects have different time origins.
     """
     origin_a = getattr(obj_a, "time_origin", None)
     origin_b = getattr(obj_b, "time_origin", None)
     if (origin_a is None) != (origin_b is None):
-        raise TypeError("Cannot combine synchronized and unsynchronized objects.")
+        raise TypeError("Cannot combine UTC time-referenced and unreferenced objects.")
     if origin_a is not None and origin_b is not None and origin_a != origin_b:
         raise ValueError(
             f"Objects have different time origins ({origin_a} vs {origin_b})."
@@ -60,7 +60,7 @@ class _Base(abc.ABC):
     """The time support of the time series"""
 
     time_origin: float
-    """Float (unix timestamp of t=0) or None if not synchronized"""
+    """Float (unix timestamp of t=0) or None if not UTC time-referenced"""
 
     def __init__(self, t, time_units="s", time_support=None, time_origin=None):
         self.time_origin = time_origin
@@ -99,7 +99,7 @@ class _Base(abc.ABC):
         Returns
         -------
         datetime.datetime or None
-            The UTC datetime corresponding to time_origin, or None if not synchronized.
+            The UTC datetime corresponding to time_origin, or None if time_origin is not set.
         """
         if self.time_origin is None:
             return None
@@ -131,16 +131,16 @@ class _Base(abc.ABC):
         object.__setattr__(new_obj, "time_origin", origin)
         return new_obj
 
-    def align_to(self, other):
+    def sync_to(self, other):
         """Return a new object with timestamps shifted to match other's time origin.
 
-        Both objects must be synchronized (have time_origin set).
+        Both objects must have time_origin set.
         Timestamps are shifted by (self.time_origin - other.time_origin).
 
         Parameters
         ----------
         other : object
-            The reference object to align to. Must have a time_origin attribute.
+            The reference object to synchronize to. Must have a time_origin attribute.
 
         Returns
         -------
@@ -148,10 +148,10 @@ class _Base(abc.ABC):
             New object with shifted timestamps and other's time_origin.
         """
         if self.time_origin is None:
-            raise TypeError("Cannot align: self has no time_origin.")
+            raise TypeError("Cannot synchronize: self has no time_origin.")
         other_origin = getattr(other, "time_origin", None)
         if other_origin is None:
-            raise TypeError("Cannot align: other has no time_origin.")
+            raise TypeError("Cannot synchronize: other has no time_origin.")
         offset = self.time_origin - other_origin
         new_t = self.index.values + offset
         new_support = IntervalSet(

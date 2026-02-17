@@ -984,7 +984,7 @@ class TsdTensor(_BaseTsd):
             Whether the data should be converted to a numpy (or jax) array. Useful when passing a memory map object like zarr.
             Default is True. Does not apply if `d` is already a numpy array  or a numpy memory map.
         time_origin : float, optional
-            Unix timestamp of t=0 (UTC epoch seconds). None if not synchronized.
+            Unix timestamp of t=0 (UTC epoch seconds). None if not UTC time-referenced.
 
         """
         super().__init__(t, d, time_units, time_support, load_array, time_origin=time_origin)
@@ -2779,7 +2779,7 @@ class Tsd(_BaseTsd):
             Whether the data should be converted to a numpy (or jax) array. Useful when passing a memory map object like zarr.
             Default is True. Does not apply if `d` is already a numpy array or a numpy memory map.
         time_origin : float, optional
-            Unix timestamp of t=0 (UTC epoch seconds). None if not synchronized.
+            Unix timestamp of t=0 (UTC epoch seconds). None if not UTC time-referenced.
         """
         if isinstance(t, pd.Series):
             d = t.values
@@ -3409,7 +3409,7 @@ class Ts(_Base):
         time_support : IntervalSet, optional
             The time support of the Ts object
         time_origin : float, optional
-            Unix timestamp of t=0 (UTC epoch seconds). None if not synchronized.
+            Unix timestamp of t=0 (UTC epoch seconds). None if not UTC time-referenced.
         """
         super().__init__(t, time_units, time_support, time_origin=time_origin)
 

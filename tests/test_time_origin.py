@@ -449,42 +449,42 @@ class TestSetTimeOrigin:
 
 
 # ===========================================================================
-# 7. align_to()
+# 7. sync_to()
 # ===========================================================================
 
 
-class TestAlignTo:
-    def test_tsd_align_to(self):
-        """Aligning shifts timestamps by offset = self.origin - other.origin."""
+class TestSyncTo:
+    def test_tsd_sync_to(self):
+        """Synchronizing shifts timestamps by offset = self.origin - other.origin."""
         tsd1 = nap.Tsd(t=[0.0, 1.0, 2.0], d=[10.0, 20.0, 30.0], time_origin=ORIGIN_A)
         tsd2 = nap.Tsd(t=[0.0, 1.0], d=[1.0, 2.0], time_origin=ORIGIN_B)
         offset = ORIGIN_A - ORIGIN_B  # -3600
 
-        result = tsd1.align_to(tsd2)
+        result = tsd1.sync_to(tsd2)
         np.testing.assert_array_almost_equal(
             result.times(), np.array([0.0, 1.0, 2.0]) + offset
         )
         assert result.time_origin == ORIGIN_B
 
-    def test_ts_align_to(self):
+    def test_ts_sync_to(self):
         ts1 = nap.Ts(t=[0.0, 1.0], time_origin=ORIGIN_A)
         ts2 = nap.Ts(t=[0.0], time_origin=ORIGIN_B)
-        result = ts1.align_to(ts2)
+        result = ts1.sync_to(ts2)
         assert result.time_origin == ORIGIN_B
 
-    def test_intervalset_align_to(self):
+    def test_intervalset_sync_to(self):
         ep1 = nap.IntervalSet(start=[0, 20], end=[10, 30], time_origin=ORIGIN_A)
         ep2 = nap.IntervalSet(start=[0], end=[5], time_origin=ORIGIN_B)
         offset = ORIGIN_A - ORIGIN_B
 
-        result = ep1.align_to(ep2)
+        result = ep1.sync_to(ep2)
         np.testing.assert_array_almost_equal(
             result.start, np.array([0, 20]) + offset
         )
         np.testing.assert_array_almost_equal(result.end, np.array([10, 30]) + offset)
         assert result.time_origin == ORIGIN_B
 
-    def test_tsgroup_align_to(self):
+    def test_tsgroup_sync_to(self):
         tsg = nap.TsGroup(
             {0: nap.Ts(t=[0.0, 1.0, 2.0])},
             time_support=nap.IntervalSet(0, 5),
@@ -493,20 +493,20 @@ class TestAlignTo:
         other = nap.Ts(t=[0.0], time_origin=ORIGIN_B)
         offset = ORIGIN_A - ORIGIN_B
 
-        result = tsg.align_to(other)
+        result = tsg.sync_to(other)
         assert result.time_origin == ORIGIN_B
         np.testing.assert_array_almost_equal(
             result[0].times(), np.array([0.0, 1.0, 2.0]) + offset
         )
 
-    def test_align_to_no_origin_self_raises(self, tsd):
+    def test_sync_to_no_origin_self_raises(self, tsd):
         other = nap.Tsd(t=[0.0], d=[1.0], time_origin=ORIGIN_A)
         with pytest.raises(TypeError, match="self has no time_origin"):
-            tsd.align_to(other)
+            tsd.sync_to(other)
 
-    def test_align_to_no_origin_other_raises(self, tsd_synced, tsd):
+    def test_sync_to_no_origin_other_raises(self, tsd_synced, tsd):
         with pytest.raises(TypeError, match="other has no time_origin"):
-            tsd_synced.align_to(tsd)
+            tsd_synced.sync_to(tsd)
 
 
 # ===========================================================================
@@ -645,7 +645,7 @@ class TestConcatenate:
     def test_concat_synced_unsynced_raises(self):
         tsd1 = nap.Tsd(t=[0.0], d=[1.0], time_origin=ORIGIN_A)
         tsd2 = nap.Tsd(t=[1.0], d=[2.0])
-        with pytest.raises(TypeError, match="synchronized and unsynchronized"):
+        with pytest.raises(TypeError, match="UTC time-referenced and unreferenced"):
             nap.concatenate(tsd1, tsd2)
 
     def test_concat_single_returns_same(self):

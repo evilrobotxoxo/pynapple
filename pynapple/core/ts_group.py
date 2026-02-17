@@ -561,7 +561,7 @@ class TsGroup(UserDict, _MetadataMixin):
         Returns
         -------
         datetime.datetime or None
-            The UTC datetime corresponding to time_origin, or None if not synchronized.
+            The UTC datetime corresponding to time_origin, or None if time_origin is not set.
         """
         if self.time_origin is None:
             return None
@@ -595,15 +595,15 @@ class TsGroup(UserDict, _MetadataMixin):
             time_origin=origin,
         )
 
-    def align_to(self, other):
+    def sync_to(self, other):
         """Return a new TsGroup with timestamps shifted to match other's time origin.
 
-        Both objects must be synchronized (have time_origin set).
+        Both objects must have time_origin set.
 
         Parameters
         ----------
         other : object
-            The reference object to align to. Must have a time_origin attribute.
+            The reference object to synchronize to. Must have a time_origin attribute.
 
         Returns
         -------
@@ -611,10 +611,10 @@ class TsGroup(UserDict, _MetadataMixin):
             New TsGroup with shifted timestamps and other's time_origin.
         """
         if self.time_origin is None:
-            raise TypeError("Cannot align: self has no time_origin.")
+            raise TypeError("Cannot synchronize: self has no time_origin.")
         other_origin = getattr(other, "time_origin", None)
         if other_origin is None:
-            raise TypeError("Cannot align: other has no time_origin.")
+            raise TypeError("Cannot synchronize: other has no time_origin.")
         offset = self.time_origin - other_origin
         new_data = {}
         for k in self.keys():

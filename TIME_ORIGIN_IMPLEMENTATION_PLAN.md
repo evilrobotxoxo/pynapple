@@ -40,7 +40,7 @@ Branch: `irig_test`
 - Store `self.time_origin = time_origin` before `_initialized = True` (line ~300)
 - Add `origin_datetime()` method (same as `_Base` version)
 - Add `set_time_origin(origin)` — returns new IntervalSet with same data + origin set
-- Add `align_to(other)` — shifts start/end by offset, sets `time_origin` to `other.time_origin`
+- Add `sync_to(other)` — shifts start/end by offset, sets `time_origin` to `other.time_origin`
 - Import `_check_time_origin_compatibility` from `base_class`
 
 ---
@@ -51,8 +51,8 @@ Branch: `irig_test`
 
 - Add `time_origin=None` param to `TsGroup.__init__` (line ~193)
 - Store `self.time_origin = time_origin` before `_initialized = True` (line ~310)
-- Add `origin_datetime()`, `set_time_origin(origin)`, `align_to(other)` methods
-- `align_to` must shift every contained Ts/Tsd object's timestamps + the time_support
+- Add `origin_datetime()`, `set_time_origin(origin)`, `sync_to(other)` methods
+- `sync_to` must shift every contained Ts/Tsd object's timestamps + the time_support
 - Import `_check_time_origin_compatibility` from `base_class`
 
 ---
@@ -91,12 +91,12 @@ Collect `time_origin` from all inputs, check compatibility, pass shared origin t
 
 ---
 
-## Step 5: Add `set_time_origin()` and `align_to()` to `_Base`
+## Step 5: Add `set_time_origin()` and `sync_to()` to `_Base`
 
 **File: `pynapple/core/base_class.py`**
 
 - `set_time_origin(origin)`: Reconstruct object via constructor with `time_origin=origin`, timestamps unchanged. Use `object.__setattr__` to bypass immutability if needed.
-- `align_to(other)`: Compute `offset = self.time_origin - other.time_origin`. Shift timestamps by offset, shift time_support by offset. Set `time_origin = other.time_origin`. Errors if either object lacks `time_origin`.
+- `sync_to(other)`: Compute `offset = self.time_origin - other.time_origin`. Shift timestamps by offset, shift time_support by offset. Set `time_origin = other.time_origin`. Errors if either object lacks `time_origin`.
 
 ---
 
@@ -170,7 +170,7 @@ Files: `Tsd.__repr__`, `TsdFrame.__repr__`, `TsdTensor.__repr__`, `Ts.__repr__` 
 4. Compatibility checks — TypeError for synced+unsynced, ValueError for different origins
 5. Propagation — `restrict()`, `count()`, numpy ops, IntervalSet ops, TsGroup slicing
 6. `set_time_origin()` — returns new object, original unchanged, timestamps unchanged
-7. `align_to()` — correct timestamp shift, result has other's origin, errors when no origin
+7. `sync_to()` — correct timestamp shift, result has other's origin, errors when no origin
 8. `nap.concatenate()` — all types, propagation, sort+warn, compatibility errors, TsGroup key merge
 9. Save/load round-trip — all types, old files without time_origin
 10. `__repr__` — shows origin when set, absent when None
@@ -179,10 +179,10 @@ Files: `Tsd.__repr__`, `TsdFrame.__repr__`, `TsdTensor.__repr__`, `Ts.__repr__` 
 
 ## Key gotchas
 
-1. **Immutability**: `set_time_origin`/`align_to` return new objects. Use `object.__setattr__` or reconstruct via constructor.
+1. **Immutability**: `set_time_origin`/`sync_to` return new objects. Use `object.__setattr__` or reconstruct via constructor.
 2. **time_support IntervalSets**: Internal time_support should NOT independently carry `time_origin` — it's part of the parent object.
 3. **`_initialize_tsd_output` kwargs**: Use `kwargs.setdefault()` not `kwargs[]=` to avoid overwriting caller-provided values.
-4. **TsGroup `align_to`**: Must shift every contained Ts/Tsd + time_support. More involved than other types.
+4. **TsGroup `sync_to`**: Must shift every contained Ts/Tsd + time_support. More involved than other types.
 5. **`nap.concatenate` vs `np.concatenate` hook**: `nap.concatenate` auto-sorts with warning; the existing `_concatenate_tsd` hook stays strict (errors on unsorted).
 
 ---
